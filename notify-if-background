@@ -97,7 +97,10 @@
 
                 active_wid=$(xdotool getactivewindow)
 
-                if [[ "$active_wid" == "$WINDOWID" ]]; then
+                zstyle -s ':notify:' window-id window_id \
+                    || zstyle -s ':notify:' parent-id window_id
+
+                if [[ "$active_wid" == "$window_id" ]]; then
                     return 0
                 fi
             ;;

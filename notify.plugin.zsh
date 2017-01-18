@@ -4,8 +4,11 @@
 #
 fpath=($fpath $(dirname $0:A))
 
+test -z "$ROOT_PPID" && export ROOT_PPID="$PPID"
+
 zstyle ':notify:*' resources-dir $(dirname $0:A)/resources
-zstyle ':notify:*' parent-pid $PPID
+zstyle ':notify:*' parent-pid $ROOT_PPID
+zstyle ':notify:*' window-pid $WINDOWID
 
 # Notify an error with no regard to the time elapsed (but always only
 # when the terminal is in background).
@@ -46,10 +49,6 @@ function store-command-stats() {
     last_command=$1
     start_time=`date "+%s"`
 }
-
-if [[ -z "$PPID_FIRST" ]]; then
-  export PPID_FIRST=$PPID
-fi
 
 autoload add-zsh-hook
 autoload -U notify-if-background
