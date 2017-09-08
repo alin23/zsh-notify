@@ -1,0 +1,236 @@
+# vim: set nowrap filetype=zsh:
+#
+# notify-if-background will exit with status 1 if the terminal application is
+# not one for which we know how to query the "frontmost/background" status, and
+# with status 2 if the terminal application or the current shell tab/window is
+# active. See README.md for configuration options.
+() {
+    local term_id type message notifier title iterm_session tmux_session tmux_window tmux_pane
+
+    type=$1
+    title="$2"
+    iterm_session="$3"
+    tmux_session="$4"
+    tmux_window="$5"
+    tmux_pane="$6"
+    message=$(<&0)
+
+    # Find a "term_id", a string that will be used later to dispatch different
+    # commands to determine whether the terminal application is active or in
+    # background.
+    function find-current-term-id {
+        local resources_dir
+        zstyle -s ':notify:' resources-dir resources_dir
+
+        if [[ "$TERM_PROGRAM" == 'iTerm.app' ]]; then
+            # Try to detect recent iTerm2 builds that use the different AS
+            # dictionary by running a script that will fail in newer but
+            # succeed in older versions.
+            if osascript "$resources_dir"/fails-on-iterm-nightly.applescript 2>/dev/null; then
+                echo iterm2
+            else
+                echo iterm2-nightly
+            fi
+        elif [[ "$TERM_PROGRAM" == 'Apple_Terminal' ]]; then
+            echo apple-terminal
+        elif which xdotool > /dev/null 2>&1; then
+            echo xdotool
+        else
+            return 1
+        fi
+    }
+
+    # Exit with 0 if inside a TMUX pane
+    function is-inside-tmux {
+        if [[ -z "$TMUX" ]]; then
+            return 1
+        else
+            return 0
+        fi
+    }
+
+    function is-inside-iterm-tmux {
+        if [[ -n "$TMUX" && `tmux display-message -p '#{client_control_mode}'` -eq 1 && `uname` == "Darwin" ]]; then
+            return 0
+        else
+            return 1
+        fi
+    }
+
+    # Exit with 0 if given TMUX pane is the active one.
+    function is-tmux-pane-active {
+        local pane
+        pane=$1
+
+        if [[ `tmux display-message -p '#D'` == "$pane" ]]; then
+            return 0
+        fi
+
+        return 1
+    }
+
+    # Exit with 0 if the terminal window/tab is active; exit with 1 if not, or
+    # if the terminal is
+    function is-terminal-window-active {
+        local term_id
+
+        term_id=$1
+
+        case "$term_id" in
+            "iterm2"|"iterm2-nightly"|"apple-terminal")
+                local current_tty resources_dir
+
+                zstyle -s ':notify:' resources-dir resources_dir
+
+                if [[ "true" == $(osascript "$resources_dir"/is-"$term_id"-active.applescript "$iterm_session") ]]; then
+                    return 0
+                fi
+            ;;
+            "xdotool")
+                local active_wid
+
+                active_wid=$(xdotool getactivewindow)
+
+                if [[ "$active_wid" == "$WINDOWID" ]]; then
+                    return 0
+                fi
+            ;;
+        esac
+        return 1
+    }
+
+    # Detect if the terminal application is in background, also accounting
+    # for TMUX if needed, exiting with status 1 if it's active.
+    function is-in-background {
+        local term_id
+
+        term_id=$1
+
+        if is-terminal-window-active "$term_id"; then
+            if is-inside-tmux; then
+                if is-tmux-pane-active "$tmux_pane"; then
+                    return 1
+                else
+                    return 0
+                fi
+            fi
+            return 1
+        fi
+
+        return 0
+    }
+
+    function notifier {
+        local notification_title message type title resources_dir iterm_session tmux_session tmux_window tmux_pane
+        local -A titles icons sounds
+
+        zstyle -s ':notify:' resources-dir resources_dir
+
+        type=$1
+        title="$2"
+        iterm_session="$3"
+        tmux_session="$4"
+        tmux_window="$5"
+        tmux_pane="$6"
+        message=$(<&0)
+
+        titles=(error "$title «ERROR»" success "$title «DONE»")
+        icons=(error "$resources_dir/error.png" success "$resources_dir/success.png")
+        sounds=(error "Sosumi" success "Tink")
+
+        zstyle -s ':notify:' timeout timeout_seconds \
+            || timeout_seconds="10"
+        zstyle -s ':notify:' "$type"-title notification_title \
+            || notification_title="$titles[$type]"
+        zstyle -s ':notify:' "$type"-sound notification_sound \
+            || notification_sound="$sounds[$type]"
+        zstyle -s ':notify:' "$type"-icon icon \
+            || icon="$icons[$type]"
+
+        function notifier-mac {
+            local app_id app_id_option sound_option
+
+            if [[ "$TERM_PROGRAM" == 'iTerm.app' ]]; then
+                app_id="com.googlecode.iterm2"
+            elif [[ "$TERM_PROGRAM" == 'Apple_Terminal' ]]; then
+                app_id="com.apple.terminal"
+            fi
+
+            if [[ ! -z "$app_id" ]]; then
+                app_id_option="-activate $app_id"
+            fi
+
+            if [[ ! -z "$notification_sound" ]]; then
+                sound_option="-sound $notification_sound"
+            fi
+
+            execute_command=''
+            if is-inside-tmux && ! is-inside-iterm-tmux; then
+                execute_command="tmux select-window -t$tmux_session:$tmux_window && tmux select-pane -t$tmux_session:$tmux_window.$tmux_pane"
+            else
+                execute_command="osascript $resources_dir/activate-iterm-session.applescript \"$iterm_session\""
+            fi
+
+            echo "$message" | terminal-notifier ${=app_id_option} ${=sound_option} -execute "$execute_command" -timeout $timeout_seconds -appIcon "$icon" -title "$notification_title" > /dev/null 2>&1
+
+        }
+
+        function notifier-linux {
+            notify-send -i "$icon" "$notification_title" "$message"
+
+            function play-sound {
+              if which paplay > /dev/null 2>&1; then
+                paplay "$1"
+              elif which aplay > /dev/null 2>&1; then
+                aplay "$1"
+              elif which ossplay > /dev/null 2>&1; then
+                ossplay "$1"
+              else
+                echo "Could not find a sound file player." >&2
+                return 1
+              fi
+            }
+
+            if [[ ! -z "$notification_sound" ]]; then
+                if [[ -a "$notification_sound" ]]; then
+                    play-sound "$notification_sound"
+                else
+                    echo "File $notification_sound not found." >&2
+                fi
+            fi
+
+            if which wmctrl > /dev/null 2>&1; then
+                local parent_pid
+
+                zstyle -s ':notify:' parent-pid parent_pid
+
+                if zstyle -t ':notify:' activate-terminal; then
+                    wmctrl -ia $(wmctrl -lp | awk -vpid=$parent_pid '$3==pid {print $1; exit}')
+                elif ! (zstyle -t ':notify:' disable-urgent); then
+                    wmctrl -i -r $(wmctrl -lp | awk -vpid=$parent_pid '$3==pid {print $1; exit}') -b add,demands_attention
+                fi
+            fi
+        }
+
+        if which terminal-notifier > /dev/null 2>&1; then
+            notifier-mac
+        elif which notify-send > /dev/null 2>&1; then
+            notifier-linux
+        else
+            echo "No notifier program found." >&2
+            return 1
+        fi
+    }
+
+    term_id=$(find-current-term-id) \
+        || return 1
+
+    is-in-background "$term_id" \
+        || return 2
+
+    zstyle -s ':notify:' notifier notifier \
+        || notifier=notifier
+
+    echo "$message" | "$notifier" "$type" "$title" "$iterm_session" "$tmux_session" "$tmux_window" "$tmux_pane"
+} "$1" "$2" "$3" "$4" "$5" "$6"
+
