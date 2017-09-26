@@ -52,7 +52,7 @@ function store-command-stats() {
     last_command=$1
     start_time=`date "+%s"`
     if [[ `uname` == "Darwin" ]]; then
-        iterm_session=`osascript -e 'tell application "iTerm" to get id of current session of current window'`
+        iterm_session=`osascript -e 'tell application "iTerm" to get id of current session of current window' 2>/dev/null`
     fi
 
     if [[ -n "$TMUX" ]]; then
@@ -62,7 +62,7 @@ function store-command-stats() {
     fi
 
     if [[ `uname` == "Darwin" ]]; then
-        title=`osascript -e 'tell application "iTerm" to get name of current session of current window'`
+        title=`osascript -e 'tell application "iTerm" to get name of current session of current window' 2>/dev/null`
     fi
     if [[ -n "$TMUX" ]]; then
         title=`tmux display-message -p '#W'`
